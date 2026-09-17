@@ -80,8 +80,12 @@ jobs:
         with:
           python-version: '3.11'
 
+      # 구글이 레거시 tools 패키지를 SDK 저장소에서 내려서,
+      # 기본값 그대로 두면 여기서 빌드가 멈춘다. 필요한 것만 지정한다.
       - name: 안드로이드 SDK 준비
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Gradle 준비
         uses: gradle/actions/setup-gradle@v4
