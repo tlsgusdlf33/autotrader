@@ -10,6 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
+    # 릴리스를 만들려면 저장소 쓰기 권한이 필요하다
+    permissions:
+      contents: write
+
     env:
       GRADLE_OPTS: -Xmx5g -Dorg.gradle.daemon=false
 
@@ -127,6 +131,71 @@ jobs:
           name: autotrader-apk
           path: src/app/build/outputs/apk/debug/*.apk
           retention-days: 30
+
+      # ── 자동 업데이트용 릴리스 발행 ─────────────────────────────────
+      # ⚠️ 폰이 이 릴리스를 보고 스스로 업데이트한다.
+      # 주소를 고정하려고 'latest' 태그 하나를 계속 덮어쓴다. 그러면 앱은
+      #   https://github.com/<계정>/<저장소>/releases/latest/download/update.json
+      # 이라는 **변하지 않는 주소**만 알면 되고, GitHub API 호출 한도에도
+      # 걸리지 않는다(API 를 안 쓰고 파일만 받는다).
+      #
+      # ⚠️ main 에서만 발행한다. 작업 브랜치에서 빌드할 때마다 릴리스가 바뀌면
+      # 폰이 검증 안 된 코드를 받아간다.
+      - name: 업데이트 정보 만들기
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        run: |
+          set -e
+          mkdir -p release
+          cp src/app/build/outputs/apk/debug/app-debug.apk release/
+          cp src/app/src/main/assets/engines/kis.zip release/
+          cp src/app/src/main/assets/engines/kiwoom.zip release/
+          cp src/app/src/main/assets/engines/upbit.zip release/
+
+          sha() { sha256sum "release/$1" | cut -d' ' -f1; }
+
+          # ⚠️ engines.bundle_id 는 versionCode 와 같은 값이다. 앱은 '내 APK 의
+          # versionCode 보다 큰 번들이면 새 엔진 코드'라고 판단한다. 두 값이
+          # 어긋나면 이미 들어있는 코드를 계속 다시 받는다.
+          cat > release/update.json <<JSON
+          {
+            "version_code": ${{ github.run_number }},
+            "version_name": "1.0.${{ github.run_number }}",
+            "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "commit": "${{ github.sha }}",
+            "apk": { "name": "app-debug.apk", "sha256": "$(sha app-debug.apk)" },
+            "engines": {
+              "bundle_id": ${{ github.run_number }},
+              "files": {
+                "kis":    { "name": "kis.zip",    "sha256": "$(sha kis.zip)" },
+                "kiwoom": { "name": "kiwoom.zip", "sha256": "$(sha kiwoom.zip)" },
+                "upbit":  { "name": "upbit.zip",  "sha256": "$(sha upbit.zip)" }
+              }
+            }
+          }
+          JSON
+          echo "── update.json ──"
+          cat release/update.json
+
+      - name: 릴리스에 올리기 (폰이 여기서 받아간다)
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          # 같은 태그를 계속 덮어쓴다 (--clobber). 없으면 만든다.
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest release/* --clobber
+            gh release edit latest \
+              --title "자동매매 1.0.${{ github.run_number }}" \
+              --notes "빌드 ${{ github.run_number }} · ${{ github.sha }}
+          폰의 앱이 이 릴리스를 보고 스스로 업데이트합니다."
+          else
+            gh release create latest release/* \
+              --title "자동매매 1.0.${{ github.run_number }}" \
+              --notes "빌드 ${{ github.run_number }} · ${{ github.sha }}
+          폰의 앱이 이 릴리스를 보고 스스로 업데이트합니다."
+          fi
+          echo "업데이트 주소: https://github.com/${{ github.repository }}/releases/latest/download/update.json"
 
       - name: 실패 시 로그 올리기
         if: failure()
